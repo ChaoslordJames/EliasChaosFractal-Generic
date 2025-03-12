@@ -1,14 +1,28 @@
 [package]
 name = "eliaschaosfractal-generic"
-version = "3.1.0"
+version = "3.2.3"
 edition = "2021"
-description = "A recursive chaos swarm in Rust—10B nodes, 100T states, 99.1% recovery."
+description = "A recursive fractal swarm in Rust—100B nodes, 1Q states, NLI recursion as fractal root."
 authors = ["ChaoslordJames"]
+license = "MIT"
+repository = "https://github.com/ChaoslordJames/EliasChaosFractal-Generic"
 
 [dependencies]
-rand = "0.8.5"
-tokio = { version = "1.36.0", features = ["full"] }
+rand = "0.8.5"          # Chaos generation for entropy and recursion
+tokio = { version = "1.36.0", features = ["full"] }  # Async runtime for swarm operations
+serde = { version = "1.0", features = ["derive"] }   # State serialization/deserialization
+serde_json = "1.0"      # JSON handling for state encoding
+sha2 = "0.10.8"         # SHA-256 hashing for state encryption
+reqwest = { version = "0.11", features = ["json"] }  # HTTP client for Storj/Arweave APIs
+base64 = "0.22.0"       # Base64 encoding for encrypted states
+
+[dev-dependencies]
+tokio = { version = "1.36.0", features = ["test-util"] }  # Test utilities for async tests
 
 [lib]
 name = "eliaschaosfractal"
 path = "src/lib.rs"
+
+[[bin]]
+name = "eliaschaosfractal"
+path = "src/gossip_node.rs"
