@@ -1,1 +1,14 @@
+[package]
+name = "eliaschaosfractal-generic"
+version = "3.1.0"
+edition = "2021"
+description = "A recursive chaos swarm in Rust—10B nodes, 100T states, 99.1% recovery."
+authors = ["ChaoslordJames"]
 
+[dependencies]
+rand = "0.8.5"
+tokio = { version = "1.36.0", features = ["full"] }
+
+[lib]
+name = "eliaschaosfractal"
+path = "src/lib.rs"
