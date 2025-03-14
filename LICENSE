@@ -19,3 +19,29 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+- **Changes**: 
+  - Updated to v3.2.9 with new features.
+  - Added *config.json* section and updated usage example.
+
+---
+
+### 4. New *config.json* (Full)
+
+Added to the root directory for v3.2.9 configuration.
+
+```json
+{
+  "peer_id": "QmPeer1",
+  "redis_host": "localhost",
+  "redis_port": 6379,
+  "storj_bucket": "elias-bucket",
+  "storj_access_token": "YOUR_STORJ_TOKEN",
+  "arweave_wallet_key": "YOUR_ARWEAVE_KEY",
+  "signaling_server": "ws://your-signaling-server:8080",
+  "max_states": 10000,
+  "max_total_states": 100000,
+  "replication_factor": 3,
+  "query_semaphore_limit": 5
+}
