@@ -1,1 +1,13 @@
- 
+{
+  "peer_id": "QmPeer1",
+  "redis_host": "localhost",
+  "redis_port": 6379,
+  "storj_bucket": "elias-bucket",
+  "storj_access_token": "YOUR_STORJ_TOKEN",
+  "arweave_wallet_key": "YOUR_ARWEAVE_KEY",
+  "signaling_server": "ws://your-signaling-server:8080",
+  "max_states": 10000,
+  "max_total_states": 100000,
+  "replication_factor": 3,
+  "query_semaphore_limit": 5
+}
