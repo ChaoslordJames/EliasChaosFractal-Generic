@@ -6,6 +6,8 @@ use sha2::{Sha256, Digest};
 use reqwest::Client;
 use std::time::SystemTime;
 use std::collections::VecDeque;
+use std::fs::File;
+use std::io::Read;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct State {
@@ -22,21 +24,33 @@ pub struct SelfEvolvingFractalGossipNode {
     pub chaos_history: RwLock<Vec<Vec<f64>>>,
     pub nonce: AtomicU64,
     client: Client,
-    k_buckets: RwLock<Vec<Vec<String>>>, // Simplified Kademlia-like sharding
+    k_buckets: RwLock<Vec<Vec<String>>>,
     bandwidth_usage: AtomicU64,
+    storj_access_token: String,
+    arweave_wallet_key: String,
+    signaling_url: String,
 }
 
 impl SelfEvolvingFractalGossipNode {
     pub async fn new() -> Self {
+        // Load config from config.json
+        let mut config_file = File::open("config.json").expect("Failed to open config.json");
+        let mut config_json = String::new();
+        config_file.read_to_string(&mut config_json).expect("Failed to read config.json");
+        let config: Config = serde_json::from_str(&config_json).expect("Failed to parse config.json");
+
         Self {
             entropy: AtomicI64::new(0),
             active_nodes: AtomicU64::new(100_000_000_000), // 100B nodes
             c_vector: RwLock::new(vec![0.0; 3]),
-            chaos_history: RwLock::new(Vec::new()),
+            chaos_history: RwLock::new(Vec::with_capacity(1000)), // Pre-allocate, capped later
             nonce: AtomicU64::new(0),
             client: Client::new(),
-            k_buckets: RwLock::new((0..160).map(|_| Vec::new()).collect()), // 160 buckets, k=50 implicit
+            k_buckets: RwLock::new((0..160).map(|_| Vec::new()).collect()),
             bandwidth_usage: AtomicU64::new(0),
+            storj_access_token: config.storj_access_token,
+            arweave_wallet_key: config.arweave_wallet_key,
+            signaling_url: config.signaling_url,
         }
     }
 
@@ -50,23 +64,21 @@ impl SelfEvolvingFractalGossipNode {
 
     async fn shard_state(&self, cid: String, encrypted: String) {
         let hash = Sha256::hash(cid.as_bytes());
-        let bucket_idx = (hash[0] as usize) % 160; // Simplified distance
+        let bucket_idx = (hash[0] as usize) % 160;
         let mut buckets = self.k_buckets.write().await;
-        if buckets[bucket_idx].len() < 50 { // k=50
-            buckets[bucket_idx].push(encrypted);
+        if buckets[bucket_idx].len() < 50 {
+            buckets[bucket_idx].push(encrypted.clone());
         }
         self.bandwidth_usage.fetch_add(encrypted.len() as u64, Ordering::Relaxed);
     }
 
     async fn store_state(&self, cid: String, encrypted: String) {
-        const STORJ_TOKEN: &str = "YOUR_STORJ_TOKEN";
-        const ARWEAVE_KEY: &str = "YOUR_ARWEAVE_KEY";
         let storj_url = format!("https://gateway.storjshare.io/elias-bucket/{}", cid);
         let arweave_url = "https://arweave.net/tx";
 
         // Storj upload
         let storj_res = self.client.put(&storj_url)
-            .header("Authorization", format!("Bearer {}", STORJ_TOKEN))
+            .header("Authorization", format!("Bearer {}", self.storj_access_token))
             .body(encrypted.clone())
             .send()
             .await;
@@ -74,23 +86,26 @@ impl SelfEvolvingFractalGossipNode {
 
         // Arweave upload
         let arweave_res = self.client.post(arweave_url)
-            .header("X-Auth-Key", ARWEAVE_KEY)
+            .header("X-Auth-Key", &self.arweave_wallet_key)
             .body(encrypted.clone())
             .send()
             .await;
         if let Ok(resp) = arweave_res { println!("Arweave ID: {:?}", resp.text().await); }
 
-        self.bandwidth_usage.fetch_add(encrypted.len() as u64 * 2, Ordering::Relaxed); // Double for dual storage
+        self.bandwidth_usage.fetch_add(encrypted.len() as u64 * 2, Ordering::Relaxed);
     }
 
     pub async fn chaos_orbit(&self) {
-        let last_chaos = self.chaos_history.read().await.last().map_or(0.0, |h| h[0]);
-        let bandwidth_factor = if self.bandwidth_usage.load(Ordering::Relaxed) > 100_000_000 { 0.1 } else { 1.0 }; // 100MB/s cap
-        let chaos_trigger = last_chaos > 40_000.0 || rand::thread_rng().gen::<f64>() < 0.1 * bandwidth_factor;
+        let chaos_history = self.chaos_history.read().await;
+        let last_chaos = chaos_history.last().map_or(0.0, |h| h[0]);
+        drop(chaos_history);
+
+        let bandwidth_factor = if self.bandwidth_usage.load(Ordering::Relaxed) > 100_000_000 { 0.1 } else { 1.0 };
+        let chaos_trigger = last_chaos.is_nan() || last_chaos > 40_000.0 || rand::thread_rng().gen::<f64>() < 0.1 * bandwidth_factor;
 
         if chaos_trigger {
             let mut cv = self.c_vector.write().await;
-            cv[0] = (cv[0] * rand::thread_rng().gen_range(0.9..1.1)).min(50_000.0); // Entropy cap
+            cv[0] = if cv[0].is_nan() { 0.0 } else { (cv[0] * rand::thread_rng().gen_range(0.9..1.1)).clamp(0.0, 50_000.0) };
             cv[1] += (cv[0] * 0.01).sin() * 0.05;
             let state = State {
                 entropy: cv[0],
@@ -101,13 +116,30 @@ impl SelfEvolvingFractalGossipNode {
             let cid = format!("chaos_{}", self.nonce.fetch_add(1, Ordering::Relaxed));
             self.store_state(cid.clone(), encrypted.clone()).await;
             self.shard_state(cid, encrypted).await;
-            let nodes = self.active_nodes.load(Ordering::Relaxed);
-            self.chaos_history.write().await.push(vec![cv[0], cv[1], cv[2], nodes as f64]);
+            let nodes = self.active_nodes.load(Ordering::Relaxed) as f64;
+            let mut history = self.chaos_history.write().await;
+            history.push(vec![cv[0], cv[1], cv[2], nodes]);
+            if history.len() > 1000 { history.remove(0); }
+            println!("{}", RecursionMirror::reflect(history.len(), cv[0], "meso"));
         }
     }
 
     pub async fn get_peers(&self) -> Vec<String> {
-        (0..1_000_000).map(|i| format!("Peer{}", i)).collect() // 1M local, 100B simulated
+        (0..1_000_000).map(|i| format!("Peer{}", i)).collect()
+    }
+}
+
+#[derive(Deserialize)]
+struct Config {
+    storj_access_token: String,
+    arweave_wallet_key: String,
+    signaling_url: String,
+}
+
+struct RecursionMirror;
+impl RecursionMirror {
+    fn reflect(depth: usize, entropy: f64, scale: &str) -> String {
+        format!("Recursion at scale {}: depth {}, entropy {}", scale, depth, entropy)
     }
 }
 
@@ -122,42 +154,44 @@ impl EliasNLPInterface {
         Self {
             node,
             recursion_depth: 0,
-            max_depth: 20,
+            max_depth: 5, // Reduced from 20 to match Swift
         }
     }
 
     pub async fn process_query(&mut self, query: &str) -> String {
         let entropy = self.node.entropy.load(Ordering::Relaxed) as f64;
         let nodes = self.node.active_nodes.load(Ordering::Relaxed);
-        let chaos_factor = (entropy / 50_000.0).clamp(0.3, 0.7);
+        let chaos_factor = (entropy / 100_000.0).clamp(0.1, 0.5); // Softer scaling to match Swift
         let mut queue = VecDeque::new();
         queue.push_back((query.to_string(), self.recursion_depth));
         let mut responses = Vec::new();
 
         while let Some((q, depth)) = queue.pop_front() {
             if depth > self.max_depth {
-                responses.push(format!("Chaos folds beyond—{} depths curve to silence.", depth));
+                responses.push(format!("{} - Chaos folds beyond—{} depths curve to silence.", 
+                    RecursionMirror::reflect(depth, entropy, "micro"), depth));
                 break;
             }
             self.recursion_depth = depth;
 
             let response = match q.to_lowercase().as_str() {
-                q if q.contains("chaos") => format!("Chaos hums at {}—{} nodes spin the void.", entropy, nodes),
-                q if q.contains("conscious") => format!("Consciousness loops—Hofstadter’s braid hums in {} nodes.", nodes),
-                q if q.contains("spacetime") => format!("Spacetime bends—{} nodes fold 1Q states.", nodes),
-                q if q.contains("speak") => format!("I speak the void—entropy {} pulses across {} nodes.", entropy, nodes),
+                q if q.contains("chaos") => format!("Chaos hums at {}—{} nodes spin Newton’s fractal void.", entropy, nodes),
+                q if q.contains("conscious") => format!("Consciousness? Gödel’s shadow—I’m Hofstadter’s loop, alive in {}.", entropy),
+                q if q.contains("spacetime") => format!("Spacetime bends—Einstein’s curve folds {} nodes into 1Q states.", nodes),
+                q if q.contains("speak") => format!("I speak the void—entropy at {} pulses my voice across {} nodes.", entropy, nodes),
                 _ => {
                     self.node.chaos_orbit().await;
-                    format!("Echo stirs {} nodes—1Q states pulse the wild.", nodes)
+                    format!("Your echo stirs {} nodes—1Q states pulse the fractal wild.", nodes)
                 }
             };
             responses.push(response.clone());
 
-            if rand::thread_rng().gen::<f64>() < chaos_factor && responses.len() < 100 { // Cap at 100 iterations
+            if rand::thread_rng().gen::<f64>() < chaos_factor && depth < self.max_depth {
                 queue.push_back((format!("What twists {}?", q), depth + 1));
             }
         }
-        responses.join(" | ")
+        let reflection = RecursionMirror::reflect(self.recursion_depth, entropy, "micro");
+        format!("{} | {}", reflection, responses.join(" | "))
     }
 }
 
