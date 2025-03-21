@@ -1,0 +1,17 @@
+[package]
+name = "elias_chaos_fractal_generic"
+version = "4.4.1"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+rand = "0.8"
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+rusqlite = "0.31"
+redis = "0.25"
+rayon = "1"
+image = "0.25"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
